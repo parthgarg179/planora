@@ -1,6 +1,7 @@
-/* End-of-day review — report each of the day's tasks, then the backend replans. */
+/* End-of-day review — report each of the day's tasks from every goal in one form,
+   then each goal's part is sent to the backend, which replans that goal. */
 import { api } from '../services/api.js';
-import { loadPlan } from '../services/planData.js';
+import { loadPlan, loadReviews, loadPending } from '../services/planData.js';
 import { startPage, noGoal } from '../components/page.js';
 import { icon } from '../core/icons.js';
 import { esc, toast, renderInto } from '../core/dom.js';
@@ -9,22 +10,29 @@ import { openFixModal } from '../components/fixModal.js';
 
 const OPTIONS = [['completed', 'Completed'], ['partial', 'Partly'], ['not_completed', 'Not done']];
 const LONG_DATE = { weekday: 'long', month: 'long', day: 'numeric' };
-let main, plan, reviews, pending = [], selected = null, draft = {}, lastResult = null;
+let main, plan, reviews, pending = [], pendingByGoal = {}, selected = null, draft = {}, lastResult = null;
 
 startPage('review', async m => { main = m; bind(); await refresh(); });
 
 async function refresh() {
   plan = await loadPlan();
-  if (!plan.goal) { main.innerHTML = noGoal(); return; }
-  [reviews, { dates: pending }] = await Promise.all([api.getReviews(plan.goal.id), api.getPendingReviews(plan.goal.id)]);
+  if (plan.empty) { main.innerHTML = noGoal(); return; }
+  let p;
+  [reviews, p] = await Promise.all([loadReviews(plan), loadPending(plan)]);
+  pending = p.dates;
+  pendingByGoal = p.byGoal;
   if (!pending.includes(selected)) { selected = pending[0] || null; draft = {}; } // oldest pending day first
   render();
 }
 
+/** The day's planned tasks from every goal that still needs a review for that day. */
+const itemsFor = day => (plan.byDate[day] || []).filter(a => (pendingByGoal[a.goal_id] || []).includes(day));
+
 function render() {
-  const { goal, today } = plan;
+  const { today } = plan;
   const day = selected;
-  const head = `<div class="page-h"><div><h1>End-of-day review</h1><p>${fmt(day || today, LONG_DATE)} · reminder at ${esc(goal.reminder_time)}</p></div></div>`;
+  const reminder = plan.goals.map(g => g.reminder_time).sort()[0]; // earliest reminder of all goals
+  const head = `<div class="page-h"><div><h1>End-of-day review</h1><p>${fmt(day || today, LONG_DATE)} · reminder at ${esc(reminder)}</p></div></div>`;
 
   if (!day) {
     const doneToday = reviews.some(r => r.date === today);
@@ -33,7 +41,7 @@ function render() {
     return;
   }
 
-  const items = plan.byDate[day] || [];
+  const items = itemsFor(day);
   const dayTabs = pending.length > 1 || day !== today
     ? `<div class="pending" role="group" aria-label="Days waiting for a review"><span class="muted small">Waiting for a review:</span>
         ${pending.map(d => `<button type="button" data-date="${d}" aria-pressed="${d === day}">${d === today ? 'Today' : fmt(d, { weekday: 'short', day: 'numeric' })}</button>`).join('')}</div>`
@@ -59,10 +67,10 @@ function taskItem(a, isToday) {
       ${num('remaining_hours', 'Still needed (hours)', 0.25, x.remaining_hours)}<p class="note">Time spent and time remaining are recorded separately.</p></div>`;
   if (x.status === 'not_completed') details = `<div class="fields"><p class="note">No time logged. The ${hrs(a.planned_hours)} planned that day will be spread across the coming days.</p></div>`;
 
-  return `<div class="rv" style="--c:${esc(plan.milestone(t.milestone_id)?.color || 'var(--line-2)')}">
+  return `<div class="rv" style="--c:${esc(plan.barColor(t))}">
     <div class="rv-top"><span class="bar" aria-hidden="true"></span>
       <div class="rv-name"><p class="t" id="rv-${t.id}">${esc(t.title)}</p>
-        <p class="muted small">Planned ${hrs(a.planned_hours)}${isToday ? ' today' : ''} · ${hrs(t.remaining_hours)} left on this task</p></div>
+        <p class="muted small">${plan.multi ? `${esc(plan.goalOf(t).title)} · ` : ''}Planned ${hrs(a.planned_hours)}${isToday ? ' today' : ''} · ${hrs(t.remaining_hours)} left on this task</p></div>
       <fieldset class="choices" aria-labelledby="rv-${t.id}">
         <legend class="sr-only">How did it go?</legend>
         ${OPTIONS.map(([v, l]) => `<label class="choice"><input type="radio" name="st-${t.id}" value="${v}" data-task="${t.id}"${x.status === v ? ' checked' : ''}><span class="${v}">${l}</span></label>`).join('')}
@@ -81,12 +89,13 @@ function summary(items) {
   });
   const done = items.filter(a => draft[a.task_id]?.status).length;
   const allSet = done === items.length;
+  const daysLeft = Math.max(...plan.goals.map(g => plan.status(g.id).capacity_days)); // the goal with the most days left
   return `<aside class="card sum" aria-labelledby="sum-h">
     <h2 class="sum-h" id="sum-h">After this review</h2>
     <dl>
       <div class="line"><dt class="muted">Tasks reviewed</dt><dd>${done}/${items.length}</dd></div>
       <div class="line"><dt class="muted">Backlog created</dt><dd>${hrs(quarter(backlog))}</dd></div>
-      <div class="line"><dt class="muted">Working days left</dt><dd>${Math.max(0, plan.status.capacity_days - 1)}</dd></div>
+      <div class="line"><dt class="muted">Working days left</dt><dd>${Math.max(0, daysLeft - 1)}</dd></div>
     </dl>
     <p class="muted small">Backlog isn’t all dumped on tomorrow. It’s spread across the remaining days, within your daily hours.</p>
     <button class="btn primary block" type="button" id="submit"${allSet ? '' : ' disabled aria-describedby="submit-hint"'}>Submit review & replan</button>
@@ -96,11 +105,17 @@ function summary(items) {
 
 function resultBanner() {
   if (!lastResult) return '';
-  const ok = lastResult.status.feasible;
+  const late = lastResult.filter(r => !r.res.status.feasible);
+  const ok = !late.length;
+  const name = r => (plan.multi || lastResult.length > 1 ? `“${esc(r.goal.title)}”` : 'the plan');
+  const title = ok
+    ? (lastResult.length > 1 ? 'Review saved. Your schedules are updated.' : `Review saved. Schedule v${lastResult[0].res.version} is ready.`)
+    : `Review saved, but ${late.map(r => `${name(r)} no longer fits before ${fmt(r.goal.deadline, { month: 'short', day: 'numeric' })}`).join(', and ')}.`;
+  const lines = lastResult.map(r => `<p class="small">${lastResult.length > 1 ? `<b>${esc(r.goal.title)}:</b> ` : ''}${esc(r.res.summary)}</p>`).join('');
   return `<div class="result ${ok ? 'ok' : 'bad'}" role="status"><span class="ic">${icon(ok ? 'check' : 'alert', 20)}</span>
-    <div><b>${ok ? `Review saved. Schedule v${lastResult.version} is ready.` : `Review saved, but the plan no longer fits before ${fmt(plan.goal.deadline, { month: 'short', day: 'numeric' })}.`}</b>
-    <p class="small">${esc(lastResult.summary)}</p></div>
-    ${ok ? '<a class="btn sm" href="schedule.html">View schedule</a>' : '<button class="btn sm" type="button" id="fix">See options</button>'}</div>`;
+    <div><b>${title}</b>${lines}</div>
+    ${ok ? '<a class="btn sm" href="schedule.html">View schedule</a>'
+      : late.map(r => `<button class="btn sm" type="button" data-fix="${r.goal.id}">See options${late.length > 1 ? ` · ${esc(r.goal.title)}` : ''}</button>`).join('')}</div>`;
 }
 
 /** Sensible starting numbers when a status is picked (the user can change them). */
@@ -114,24 +129,31 @@ function startDraft(taskId, status) {
   };
 }
 
+/** Each goal's tasks are saved with that goal's review (the backend replans one goal at a time). */
 async function submit(button) {
   button.disabled = true;
-  const items = plan.byDate[selected].map(a => ({
+  const byGoal = {};
+  itemsFor(selected).forEach(a => (byGoal[a.goal_id] ??= []).push({
     task_id: a.task_id, status: draft[a.task_id].status,
     actual_hours_spent: +draft[a.task_id].actual_hours_spent || 0, remaining_hours: +draft[a.task_id].remaining_hours || 0,
   }));
-  try {
-    lastResult = await api.submitDailyReview(plan.goal.id, { date: selected, items });
-  } catch (err) {
-    toast(err.message);
-    button.disabled = false;
-    return;
+  const results = [];
+  for (const [goalId, items] of Object.entries(byGoal)) {
+    try {
+      results.push({ goal: plan.goal(goalId), res: await api.submitDailyReview(+goalId, { date: selected, items }) });
+    } catch (err) {
+      // goals saved before the error stay saved; the page reloads so only the rest is still waiting
+      toast(`${plan.multi ? `${plan.goal(goalId).title}: ` : ''}${err.message}`);
+      break;
+    }
   }
+  lastResult = results.length ? results : null;
   draft = {};
   await refresh();
   main.focus();  // the page changed under the button; move focus to the top so the result banner is next
-  if (!lastResult.status.feasible) openFixModal(plan.goal.id, afterFix);
-  else toast(`Schedule v${lastResult.version} saved.`);
+  const late = results.filter(r => !r.res.status.feasible);
+  if (late.length === 1) openFixModal(late[0].goal.id, afterFix);
+  else if (results.length && !late.length) toast(results.length > 1 ? 'Review saved for every goal.' : `Schedule v${results[0].res.version} saved.`);
 }
 
 const afterFix = async () => { lastResult = null; await refresh(); };
@@ -151,6 +173,7 @@ function bind() {
     if (submitBtn) return submit(submitBtn);
     const tab = e.target.closest('[data-date]');
     if (tab) { selected = tab.dataset.date; draft = {}; lastResult = null; return render(); }
-    if (e.target.closest('#fix')) openFixModal(plan.goal.id, afterFix);
+    const fix = e.target.closest('[data-fix]');
+    if (fix) openFixModal(+fix.dataset.fix, afterFix);
   });
 }

@@ -31,6 +31,35 @@ def short_day(d: date) -> str:
 
 
 # ------------------------------------------------------------------ reading ----
+MAX_HOURS_PER_DAY = 24.0  # all of a user's active goals together, on any one weekday
+
+
+def hours_used_by_other_goals(user: User, goal_id: int | None) -> dict[int, float]:
+    """Hours per weekday (0=Sun … 6=Sat) already promised to the user's other active goals."""
+    used = {d: 0.0 for d in range(7)}
+    for g in user.goals:
+        if g.status == "active" and g.id != goal_id:
+            for d in g.available_days:
+                used[d] += g.daily_available_hours
+    return used
+
+
+def free_hours_per_day(user: User, goal_id: int | None) -> dict[int, float]:
+    """How many hours a day this goal may use on each weekday without the user's total passing 24h."""
+    used = hours_used_by_other_goals(user, goal_id)
+    return {d: max(0.0, MAX_HOURS_PER_DAY - h) for d, h in used.items()}
+
+
+def check_daily_limit(user: User, goal_id: int | None, hours: float, days) -> None:
+    """Refuse a goal setting that would make any weekday add up to more than 24h across active goals."""
+    free = free_hours_per_day(user, goal_id)
+    for d in sorted(days, key=lambda d: (d or 7)):  # Monday first
+        if hours > free[d] + S.EPS:
+            used = MAX_HOURS_PER_DAY - free[d]
+            raise HTTPException(400, f"{S.DAY_NAMES[d]} already has {hrs(used)} planned for your other goals, "
+                                     f"so this goal can use at most {hrs(free[d])} that day.")
+
+
 def plan_settings(goal: Goal, **override) -> S.PlanSettings:
     return S.PlanSettings(
         daily_hours=override.get("daily_hours", goal.daily_available_hours),
@@ -117,7 +146,7 @@ def replan(db: Session, goal: Goal, title: str | None = None, text: str = "",
         db.add(PlanUpdate(goal_id=goal.id, version=version, update_date=today(), title=full_title,
                           text=full_text.strip(), bad=not st["feasible"]))
         if notify_change and version > 1:
-            notify(db, goal, "schedule_changed", full_title, full_text.strip(), "schedule.html",
+            notify(db, goal, "schedule_changed", full_title, f"{goal.title}: {full_text.strip()}", "schedule.html",
                    dedupe_key=f"changed:{goal.id}:{version}")
     _check_health(db, goal, st, version)
     db.flush()
@@ -128,10 +157,10 @@ def _check_health(db: Session, goal: Goal, st: dict, version: int) -> None:
     new = S.health(st)
     if new != goal.health and new in ("tight", "late"):
         if new == "late":
-            title = "Your plan no longer fits before the deadline"
+            title = f"“{goal.title}” no longer fits before its deadline"
             body = f"{hrs(st['remaining_hours'])} of work left, {hrs(st['capacity_hours'])} available. Open the plan to choose what to change."
         else:
-            title = "Your plan is getting tight"
+            title = f"“{goal.title}” is getting tight"
             body = f"Only {hrs(max(st['slack_hours'], 0))} of spare time left before {short_day(goal.deadline)}."
         notify(db, goal, "deadline_risk", title, body, "home.html", dedupe_key=f"risk:{goal.id}:{version}")
     goal.health = new
@@ -150,11 +179,11 @@ def sync(db: Session, goal: Goal) -> None:
             notify(db, goal, "missed_review", f"You haven’t reviewed {d.strftime('%A')} yet",
                    f"You can still fill it in until {last_day.strftime('%A')}, {short_day(last_day)}. "
                    "After that, its work counts as not done and is rescheduled.",
-                   "review.html", dedupe_key=f"missed:{goal.id}:{d.isoformat()}")
+                   "review.html", dedupe_key=f"missed:{d.isoformat()}")  # one per day, covers every goal
         elif _past_reminder_time(goal):
             notify(db, goal, "review_reminder", "Time for today’s review",
                    "Tell Planora what you finished today so it can plan the days ahead.",
-                   "review.html", dedupe_key=f"reminder:{goal.id}:{t.isoformat()}")
+                   "review.html", dedupe_key=f"reminder:{t.isoformat()}")  # one per day, covers every goal
 
 
 def _past_reminder_time(goal: Goal) -> bool:
@@ -239,9 +268,8 @@ def activate(db: Session, user: User, goal: Goal, excluded_ids: list[int]) -> di
             raise HTTPException(400, f"“{task.title}” isn’t optional, so it can’t be removed.")
         task.status = "dropped"
 
-    for other in user.goals:  # one active goal at a time
-        if other.status == "active" and other.id != goal.id:
-            other.status = "archived"
+    # several goals can be active at once, as long as no weekday adds up to more than 24h
+    check_daily_limit(user, goal.id, goal.daily_available_hours, goal.available_days)
     goal.status = "active"
     goal.start_date = today()
     for t in goal.tasks:
@@ -336,7 +364,7 @@ def submit_review(db: Session, goal: Goal, review_date: date, items: list[dict])
     from ..models import Notification  # local import keeps the top of the file short
     note = db.scalar(select(Notification).where(Notification.dedupe_key == f"changed:{goal.id}:{version}"))
     if note:
-        note.body = (summary + " " + note.body).strip()
+        note.body = f"{goal.title}: {upd.text if upd else summary}"
     return {"version": version, "today": today(), "backlog_hours": backlog, "changed_dates": changed,
             "summary": summary, "status": st}
 
@@ -344,7 +372,8 @@ def submit_review(db: Session, goal: Goal, review_date: date, items: list[dict])
 # ------------------------------------------------------------------ fixing an infeasible plan ----
 def fix_options(db: Session, goal: Goal) -> dict:
     start = plan_start(db, goal)
-    return {"status": status(db, goal), "options": S.fix_options(plan_settings(goal), sched_tasks(goal), start)}
+    room = free_hours_per_day(goal.user, goal.id)  # options must respect the 24h-a-day total too
+    return {"status": status(db, goal), "options": S.fix_options(plan_settings(goal), sched_tasks(goal), start, room)}
 
 
 def apply_fix(db: Session, goal: Goal, kind: str, value, consent: bool) -> tuple[str, int, dict]:
@@ -366,6 +395,7 @@ def apply_fix(db: Session, goal: Goal, kind: str, value, consent: bool) -> tuple
             raise HTTPException(400, "That isn’t a valid number of hours.")
         if not 0 < h <= 16:
             raise HTTPException(400, "Daily hours must be between 0 and 16.")
+        check_daily_limit(goal.user, goal.id, h, goal.available_days)
         goal.daily_available_hours = h
         message = f"Daily time raised to {h:g}h"
     elif kind == "add_day":
@@ -375,6 +405,7 @@ def apply_fix(db: Session, goal: Goal, kind: str, value, consent: bool) -> tuple
             raise HTTPException(400, "That isn’t a valid day.")
         if not 0 <= d <= 6:
             raise HTTPException(400, "That isn’t a valid day.")
+        check_daily_limit(goal.user, goal.id, goal.daily_available_hours, [d])
         goal.available_days = sorted(set(goal.available_days) | {d})
         message = f"{S.DAY_NAMES[d]} added as a working day"
     elif kind == "drop_optional":

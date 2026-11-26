@@ -33,6 +33,7 @@ def list_goals(status: str | None = Query(default=None), user: User = Depends(cu
 def create_goal(body: GoalCreate, user: User = Depends(current_user), db: Session = Depends(get_db)):
     if body.deadline <= today():
         raise HTTPException(400, "The deadline must be after today.")
+    planner.check_daily_limit(user, None, body.daily_available_hours, body.available_days)
     goal = Goal(user_id=user.id, title=body.title.strip(), description=body.description.strip(), status="draft",
                 deadline=body.deadline, daily_available_hours=body.daily_available_hours,
                 available_days=body.available_days, start_date=today())
@@ -53,6 +54,8 @@ def update_preferences(body: GoalUpdate, goal: Goal = Depends(owned_goal), db: S
         raise HTTPException(400, "The deadline can’t be in the past.")
     plan_fields = {"deadline", "daily_available_hours", "available_days"}
     plan_changed = any(getattr(goal, f) != v for f, v in changes.items() if f in plan_fields)
+    planner.check_daily_limit(goal.user, goal.id, changes.get("daily_available_hours", goal.daily_available_hours),
+                              changes.get("available_days", goal.available_days))
     for field, value in changes.items():
         setattr(goal, field, value)
     version = goal.schedule_version

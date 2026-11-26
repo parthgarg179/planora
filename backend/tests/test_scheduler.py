@@ -105,6 +105,16 @@ def test_fix_options_each_make_sense():
     assert "add_day" in opts
 
 
+def test_fix_options_respect_hours_left_by_other_goals():
+    tasks = [SchedTask(1, 21)]
+    # other goals leave only 2.5h free on weekdays and nothing at the weekend
+    room = {0: 0, 1: 2.5, 2: 2.5, 3: 2.5, 4: 2.5, 5: 2.5, 6: 0}
+    opts = {o["kind"]: o for o in fix_options(settings(2), tasks, MON, room)}
+    assert "add_day" not in opts  # Sat and Sun are full
+    if "increase_hours" in opts:
+        assert opts["increase_hours"]["value"] <= 2.5
+
+
 def test_deterministic():
     tasks = [SchedTask(i, 1.5, priority=["High", "Low", "Normal"][i % 3], position=i) for i in range(10)]
     assert build_schedule(settings(2), tasks, MON).plan == build_schedule(settings(2), tasks, MON).plan

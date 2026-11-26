@@ -11,9 +11,21 @@ const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 const today = toKey(new Date());
 const form = { title: '', deadline: addDays(today, 28), daily_available_hours: 2, available_days: [1, 2, 3, 4, 5, 6] };
 let step = 1, loading = false, draftGoal = null, breakdown = null, excluded = new Set(), error = '';
-let main;
+let main, usedByOthers = {}; // hours per weekday (0=Sun … 6=Sat) already taken by the user's active goals
+const MAX_DAY = 24;            // all goals together can't plan more than 24h on one day
 
-startPage('new-goal', async m => { main = m; bind(); render(); });
+startPage('new-goal', async m => {
+  main = m;
+  (await api.getActiveGoals()).forEach(g => g.available_days.forEach(d => (usedByOthers[d] = (usedByOthers[d] || 0) + g.daily_available_hours)));
+  bind();
+  render();
+});
+
+/** First chosen day where this goal's hours would push the day past 24h, or null. */
+function overFullDay() {
+  const d = DAY_ORDER.find(d => form.available_days.includes(d) && (usedByOthers[d] || 0) + form.daily_available_hours > MAX_DAY);
+  return d === undefined ? null : d;
+}
 
 function capacity() {
   let hours = 0, days = 0;
@@ -43,9 +55,19 @@ function goalForm() {
       <fieldset class="fld"><legend>Working days</legend><div class="daychips">${DAY_ORDER.map(d =>
         `<button type="button" data-day="${d}" aria-pressed="${form.available_days.includes(d)}">${DAY_NAMES[d]}</button>`).join('')}</div></fieldset>
       <p class="note" aria-live="polite">${icon('clock', 13)}Total time available: <b>${hrs(cap.hours)}</b> across ${cap.days} working days</p>
+      ${othersNote()}
       <p class="err" role="alert">${esc(error)}</p>
       <div><button class="btn primary" type="submit">${icon('spark', 15)} Break it down</button></div>
     </form></div>`;
+}
+
+/** With other goals: how many hours a day are still free (only the busiest chosen day matters). */
+function othersNote() {
+  const chosen = form.available_days.filter(d => usedByOthers[d]);
+  if (!chosen.length) return '';
+  const busiest = chosen.reduce((a, d) => (usedByOthers[d] > usedByOthers[a] ? d : a));
+  const free = Math.max(0, MAX_DAY - usedByOthers[busiest]);
+  return `<p class="note">${icon('calendar', 13)}Your other goals already use ${hrs(usedByOthers[busiest])} on ${DAY_NAMES[busiest]}, so this goal can have up to <b>${hrs(free)}</b> a day on the days you picked.</p>`;
 }
 
 const loadingCard = () => `<div class="card loading-card" role="status">
@@ -160,7 +182,8 @@ function bind() {
     readForm();
     error = !form.title ? 'Describe your goal.'
       : !form.available_days.length ? 'Pick at least one working day.'
-      : form.deadline <= today ? 'The deadline must be after today.' : '';
+      : form.deadline <= today ? 'The deadline must be after today.'
+      : overFullDay() !== null ? `${DAY_NAMES[overFullDay()]} would add up to more than 24h with your other goals. Lower the hours or pick other days.` : '';
     if (error) { render(); return main.querySelector(form.title ? '#f-deadline' : '#f-title').focus(); }
     breakDown();
   });

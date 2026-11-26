@@ -3,11 +3,11 @@
    Wide screens (>= 1100px): main column (plan, schedule) + side column (review, health,
    progress, updates); from 1500px plan and schedule sit side by side. Smaller screens: one column. */
 import { api } from '../services/api.js';
-import { loadPlan } from '../services/planData.js';
+import { loadPlan, perGoal, loadReviews, loadPending, goalTag } from '../services/planData.js';
 import { startPage, noGoal } from '../components/page.js';
 import { icon, priorityFlag } from '../core/icons.js';
 import { esc, renderInto } from '../core/dom.js';
-import { fmt, hrs, addDays, weekStart, parse, dayOfWeek, diffDays, timeBlocks, greeting, DAY_NAMES, isWorkingDay } from '../core/dates.js';
+import { fmt, hrs, addDays, weekStart, parse, dayOfWeek, diffDays, greeting, DAY_NAMES } from '../core/dates.js';
 import { taskPill, deadlinePill, reviewPill, milestoneTag } from '../components/pills.js';
 import { taskTable, taskButton } from '../components/taskList.js';
 import { openTaskDrawer } from '../components/taskDrawer.js';
@@ -20,34 +20,37 @@ startPage('home', async m => { main = m; bind(); await refresh(); });
 
 async function refresh() {
   plan = await loadPlan();
-  if (!plan.goal) { main.innerHTML = noGoal(); return; }
-  let p;
-  [user, updates, reviews, p] = await Promise.all([api.getMe(), api.getUpdates(plan.goal.id), api.getReviews(plan.goal.id), api.getPendingReviews(plan.goal.id)]);
+  if (plan.empty) { main.innerHTML = noGoal(); return; }
+  let p, u;
+  [user, u, reviews, p] = await Promise.all([api.getMe(), perGoal(plan, api.getUpdates), loadReviews(plan), loadPending(plan)]);
+  // every goal's plan updates in one list, newest first
+  updates = plan.goals.flatMap(g => u[g.id].map(x => ({ ...x, goal_id: g.id }))).sort((a, b) => b.date.localeCompare(a.date));
   pending = p.dates;
   render();
 }
 
 function render() {
-  const { goal, today } = plan;
+  const { today } = plan;
   renderInto(main, `<div class="wrap"><div class="dash">
-    ${hero(goal, today)}
+    ${hero(today)}
     ${planCard(today)}
-    ${scheduleCard(goal, today)}
-    <div class="side-col">${reviewCta(today)}${healthCard(goal, today)}${snapshotCard()}${updatesCard()}</div>
+    ${scheduleCard(today)}
+    <div class="side-col">${reviewCta(today)}${healthCard(today)}${snapshotCard()}${updatesCard()}</div>
   </div></div>`);
 }
 
-function hero(goal, today) {
+function hero(today) {
   const live = plan.tasks.filter(t => t.status !== 'dropped');
   const done = live.filter(t => t.status === 'done').length;
-  const st = plan.status;
+  const st = plan.total;
+  const goal = plan.goals[0]; // goals are sorted by deadline, so this is the next one due
   return `<header class="hero a-hero">
     <p class="date">${fmt(today, { weekday: 'long', month: 'long', day: 'numeric' })}</p>
     <h1>${greeting()}, ${esc(user.name.split(' ')[0])}</h1>
     <ul class="chips">
       <li class="chip"><span class="ci ok">${icon('check', 12, 3)}</span><b>${done}/${live.length}</b> tasks completed</li>
       <li class="chip"><span class="ci">${icon('clock', 12, 2.4)}</span><b>${hrs(st.remaining_hours)}</b> left of ${hrs(st.capacity_hours)} available</li>
-      <li class="chip">${deadlinePill(st)} <span class="muted">due ${fmt(goal.deadline, { month: 'short', day: 'numeric' })}</span></li>
+      <li class="chip">${deadlinePill(st)} <span class="muted">${plan.multi ? `${plan.goals.length} goals · next due` : 'due'} ${fmt(goal.deadline, { month: 'short', day: 'numeric' })}</span></li>
     </ul>
   </header>`;
 }
@@ -64,14 +67,14 @@ function planCard(today) {
       if (d >= today) (plan.byDate[d] || []).forEach(a => rows.push({ ...a, date: d }));
     }
   }
-  const columns = [...(week ? ['Day'] : []), 'Planned', 'Priority', 'Milestone', 'Status'];
+  const columns = [...(week ? ['Day'] : []), 'Planned', 'Priority', ...(plan.multi ? ['Goal'] : []), 'Milestone', 'Status'];
   const table = rows.length ? taskTable({
     caption: week ? 'Tasks planned for the rest of this week' : 'Tasks planned for today',
     columns,
     rows: rows.map(a => {
       const t = plan.task(a.task_id);
       return { task: t, cells: [...(week ? [fmt(a.date, { weekday: 'short', day: 'numeric' })] : []),
-        hrs(a.planned_hours), priorityFlag(t.priority), milestoneTag(plan.milestone(t.milestone_id)), taskPill(t)] };
+        hrs(a.planned_hours), priorityFlag(t.priority), ...(plan.multi ? [goalTag(plan, t.goal_id)] : []), milestoneTag(plan.milestone(t.milestone_id)), taskPill(t)] };
     }),
   }) : `<p class="empty">Nothing scheduled ${week ? 'for the rest of this week' : 'today'}.</p>`;
 
@@ -85,24 +88,25 @@ function planCard(today) {
 }
 
 /** Week strip + the chosen day's time blocks. */
-function scheduleCard(goal, today) {
+function scheduleCard(today) {
   const selDay = view.day || today;
   const ws = weekStart(selDay);
   const review = reviews.find(r => r.date === selDay);
-  const blocks = timeBlocks(plan.byDate[selDay] || [], goal.start_time);
+  const blocks = plan.dayBlocks(selDay);
   const strip = [0, 1, 2, 3, 4, 5, 6].map(i => {
     const d = addDays(ws, i);
-    const cls = [!isWorkingDay(goal, d) && 'off', d === goal.deadline && 'dl'].filter(Boolean).join(' ');
+    const due = plan.deadlinesOn(d);
+    const cls = [!plan.isWorking(d) && 'off', due.length && 'dl'].filter(Boolean).join(' ');
     return `<button type="button" data-day="${d}" aria-pressed="${d === selDay}"${cls ? ` class="${cls}"` : ''}
-      aria-label="${fmt(d, { weekday: 'long', month: 'long', day: 'numeric' })}${d === goal.deadline ? ', deadline' : ''}">${DAY_NAMES[dayOfWeek(d)]} ${parse(d).getDate()}</button>`;
+      aria-label="${fmt(d, { weekday: 'long', month: 'long', day: 'numeric' })}${due.length ? `, deadline for ${esc(due.map(g => g.title).join(', '))}` : ''}">${DAY_NAMES[dayOfWeek(d)]} ${parse(d).getDate()}</button>`;
   }).join('');
   const list = blocks.length ? `<ul class="blocks">${blocks.map(b => {
     const t = plan.task(b.task_id);
     const ri = review?.items.find(x => x.task_id === b.task_id);
-    return `<li class="blk click" data-task="${t.id}" style="--c:${esc(plan.milestone(t.milestone_id)?.color || 'var(--line-2)')}"><span class="bar"></span>
-      <div>${taskButton(t)}<p class="s">${b.from} to ${b.to}${selDay > goal.deadline ? ' · <span class="dlmark">after deadline</span>' : ''}</p></div>
+    return `<li class="blk click" data-task="${t.id}" style="--c:${esc(plan.barColor(t))}"><span class="bar"></span>
+      <div>${taskButton(t)}<p class="s">${b.from} to ${b.to}${plan.multi ? ` · ${esc(plan.goalOf(t).title)}` : ''}${selDay > plan.goalOf(t).deadline ? ' · <span class="dlmark">after deadline</span>' : ''}</p></div>
       <span class="h">${ri ? reviewPill(ri.status) : `<span class="pill brand">${hrs(b.planned_hours)}</span>`}</span></li>`;
-  }).join('')}</ul>` : `<p class="empty">${isWorkingDay(goal, selDay) ? 'Nothing scheduled.' : 'Not a working day.'}</p>`;
+  }).join('')}</ul>` : `<p class="empty">${plan.isWorking(selDay) ? 'Nothing scheduled.' : 'Not a working day.'}</p>`;
 
   return `<section class="card a-sched" aria-labelledby="sched-h">
     <div class="card-h"><h2 id="sched-h">${icon('calendar', 18)} Schedule</h2><div class="r"><a class="link" href="schedule.html">Open</a></div></div>
@@ -111,13 +115,19 @@ function scheduleCard(goal, today) {
   </section>`;
 }
 
-function healthCard(goal, today) {
-  const st = plan.status;
-  const pct = Math.min(100, st.remaining_hours / Math.max(st.capacity_hours, 0.01) * 100);
+function healthCard(today) {
   return `<section class="card a-health" aria-labelledby="health-h">
-    <div class="card-h"><h2 id="health-h">${icon('target', 18)} Goal health</h2><div class="r">${deadlinePill(st)}</div></div>
-    <div class="health">
-      <p class="muted hrow">${esc(goal.title)}</p>
+    <div class="card-h"><h2 id="health-h">${icon('target', 18)} Goal health</h2>${plan.multi ? '' : `<div class="r">${deadlinePill(plan.total)}</div>`}</div>
+    ${plan.goals.map(g => goalHealth(g, today)).join('')}
+  </section>`;
+}
+
+/** One goal's remaining work vs. available time, with a fix button when it doesn't fit. */
+function goalHealth(goal, today) {
+  const st = plan.status(goal.id);
+  const pct = Math.min(100, st.remaining_hours / Math.max(st.capacity_hours, 0.01) * 100);
+  return `<div class="health">
+      <p class="muted hrow">${plan.multi ? `<span>${goalTag(plan, goal.id)}</span>${deadlinePill(st)}` : esc(goal.title)}</p>
       <p class="hrow"><span>Remaining work <b>${hrs(st.remaining_hours)}</b></span><span class="muted">Available ${hrs(st.capacity_hours)}</span></p>
       <div class="meter" role="img" aria-label="${hrs(st.remaining_hours)} of work for ${hrs(st.capacity_hours)} available"><i class="${st.feasible ? '' : 'over'}" style="--w:${pct}%"></i></div>
       <dl class="kpis">
@@ -125,16 +135,15 @@ function healthCard(goal, today) {
         <div class="kpi"><dt class="l">${st.slack_hours >= 0 ? 'buffer' : 'shortfall'}</dt><dd class="v${st.slack_hours < 0 ? ' neg' : ''}">${st.slack_hours >= 0 ? '+' : ''}${hrs(st.slack_hours)}</dd></div>
         <div class="kpi"><dt class="l">projected finish</dt><dd class="v">${st.projected_finish ? fmt(st.projected_finish, { month: 'short', day: 'numeric' }) : '—'}</dd></div>
       </dl>
-      ${st.feasible ? '' : `<button class="btn sm danger gap-top" type="button" id="fix">${icon('alert', 14)} See options to fix the plan</button>`}
-    </div>
-  </section>`;
+      ${st.feasible ? '' : `<button class="btn sm danger gap-top" type="button" data-fix="${goal.id}">${icon('alert', 14)} See options to fix the plan</button>`}
+    </div>`;
 }
 
 function updatesCard() {
   return `<section class="card a-updates" aria-labelledby="upd-h">
     <div class="card-h"><h2 id="upd-h">${icon('note', 18)} Plan updates</h2></div>
     ${updates.length ? `<ul class="upd-list">${updates.slice(0, 4).map(u => `<li class="upd"><span class="o${u.bad ? ' bad' : ''}" aria-hidden="true"></span>
-      <div><p class="t">${esc(u.title)}</p><p class="s">${esc(u.text)}</p></div></li>`).join('')}</ul>` : '<p class="empty">No updates yet.</p>'}
+      <div><p class="t">${esc(u.title)}</p><p class="s">${plan.multi ? `${esc(plan.goal(u.goal_id).title)}: ` : ''}${esc(u.text)}</p></div></li>`).join('')}</ul>` : '<p class="empty">No updates yet.</p>'}
   </section>`;
 }
 
@@ -177,7 +186,8 @@ function bind() {
     if (task) return openTaskDrawer(plan, task.dataset.task, refresh);
     const day = e.target.closest('[data-day]');
     if (day) { view.day = day.dataset.day; return render(); }
-    if (e.target.closest('#fix')) openFixModal(plan.goal.id, refresh);
+    const fix = e.target.closest('[data-fix]');
+    if (fix) openFixModal(+fix.dataset.fix, refresh);
   });
   main.addEventListener('change', e => { if (e.target.id === 'range') { view.range = e.target.value; render(); } });
 }

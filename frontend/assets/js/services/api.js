@@ -21,7 +21,7 @@ const real = {
   getEstimates: () => request('/users/me/estimates'),                             // → {finished_tasks,threshold,model_ready,model_synthetic}
 
   /* ---------- goals ---------- */
-  getActiveGoal: async () => (await request('/goals?status=active'))[0] || null,
+  getActiveGoals: () => request('/goals?status=active'),                         // → [goal, …] (a user can have several)
   createGoal: body => request('/goals', { method: 'POST', body }),               // {title,deadline,daily_available_hours,available_days}
   decomposeGoal: id => request(`/goals/${id}/decompose`, { method: 'POST' }),     // → {milestones,tasks,checks,used_fallback}
   createSchedule: (id, body) => request(`/goals/${id}/schedule`, { method: 'POST', body }), // {excluded_task_ids}

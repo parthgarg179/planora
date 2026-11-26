@@ -25,7 +25,8 @@ export function timeBlocks(items, startTime = '19:00') {
     const H = Math.floor(x / 60) % 24, M = x % 60;
     return `${((H + 11) % 12) + 1}${M ? ':' + pad(M) : ''} ${H >= 12 ? 'pm' : 'am'}`;
   };
-  return items.map(it => { const s = t; t += Math.round(it.planned_hours * 60); return { ...it, from: label(s), to: label(t) }; });
+  // `start` (minutes after midnight) lets blocks from different goals be sorted into one day
+  return items.map(it => { const s = t; t += Math.round(it.planned_hours * 60); return { ...it, start: s, from: label(s), to: label(t) }; });
 }
 
 export const greeting = () => { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; };

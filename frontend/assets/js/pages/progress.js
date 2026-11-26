@@ -1,6 +1,6 @@
 /* Progress — completion, personalised-estimate status, estimated vs actual time, review history. */
 import { api } from '../services/api.js';
-import { loadPlan } from '../services/planData.js';
+import { loadPlan, loadReviews } from '../services/planData.js';
 import { startPage, noGoal } from '../components/page.js';
 import { esc } from '../core/dom.js';
 import { fmt, hrs } from '../core/dates.js';
@@ -11,11 +11,12 @@ const RING = 2 * Math.PI * 44; // circumference of the completion ring
 
 startPage('progress', async main => {
   const plan = await loadPlan();
-  if (!plan.goal) { main.innerHTML = noGoal(); return; }
-  const [reviews, est] = await Promise.all([api.getReviews(plan.goal.id), api.getEstimates()]);
+  if (plan.empty) { main.innerHTML = noGoal(); return; }
+  const [reviews, est] = await Promise.all([loadReviews(plan), api.getEstimates()]);
+  const sub = plan.multi ? `All ${plan.goals.length} goals: ${plan.goals.map(g => esc(g.title)).join(' · ')}` : esc(plan.goals[0].title);
 
   main.innerHTML = `<div class="wrap">
-    <div class="page-h"><div><h1>Progress</h1><p>${esc(plan.goal.title)}</p></div></div>
+    <div class="page-h"><div><h1>Progress</h1><p>${sub}</p></div></div>
     <div class="grid2 first">
       ${completionCard(plan)}
       <section class="card" aria-label="Personalised estimates">${estimatesCard(est, plan.tasks)}</section>
@@ -43,7 +44,7 @@ function completionCard(plan) {
         <ul class="ring-facts">
           <li><b>${done.length}</b> of ${live.length} tasks done</li>
           <li><b>${hrs(spent)}</b> spent so far</li>
-          <li><b>${hrs(plan.status.remaining_hours)}</b> still to do</li>
+          <li><b>${hrs(plan.total.remaining_hours)}</b> still to do</li>
         </ul></div>
     </div>
   </section>`;

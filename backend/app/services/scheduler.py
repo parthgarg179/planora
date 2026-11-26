@@ -156,9 +156,13 @@ def health(status: dict) -> str:
 DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
 
-def fix_options(settings: PlanSettings, tasks: list[SchedTask], start: date) -> list[dict]:
-    """Ways to make an infeasible plan fit. Nothing is applied here; the user chooses."""
+def fix_options(settings: PlanSettings, tasks: list[SchedTask], start: date,
+                room: dict[int, float] | None = None) -> list[dict]:
+    """Ways to make an infeasible plan fit. Nothing is applied here; the user chooses.
+    `room` = most hours this goal may use on each weekday (0=Sun … 6=Sat), because the user's
+    other goals share the same 24-hour days. None means no other goals."""
     base = evaluate(settings, tasks, start)
+    room = room or {d: 24.0 for d in range(7)}
 
     def result(st: dict) -> dict:
         return {"feasible": st["feasible"], "finish": st["projected_finish"],
@@ -172,8 +176,9 @@ def fix_options(settings: PlanSettings, tasks: list[SchedTask], start: date) -> 
                         "detail": "Keeps your hours and scope as they are",
                         "result": {"feasible": True, "finish": finish, "shortfall_hours": 0}, "needs_consent": False})
 
+    max_h = min([16, settings.daily_hours + 4] + [room[d] for d in settings.working_days])
     h = settings.daily_hours + 0.5
-    while h <= min(16, settings.daily_hours + 4) + EPS:
+    while h <= max_h + EPS:
         st = evaluate(PlanSettings(h, settings.working_days, settings.deadline), tasks, start)
         if st["feasible"]:
             options.append({"kind": "increase_hours", "value": h,
@@ -182,7 +187,8 @@ def fix_options(settings: PlanSettings, tasks: list[SchedTask], start: date) -> 
             break
         h += 0.5
 
-    missing = [d for d in (0, 1, 2, 3, 4, 5, 6) if d not in settings.working_days]
+    missing = [d for d in (0, 1, 2, 3, 4, 5, 6)
+               if d not in settings.working_days and room[d] + EPS >= settings.daily_hours]
     if missing:
         d = missing[0]
         st = evaluate(PlanSettings(settings.daily_hours, settings.working_days | {d}, settings.deadline), tasks, start)

@@ -135,14 +135,30 @@ def test_non_optional_task_cannot_be_excluded(client):
     assert client.post(f"/goals/{gid}/schedule", headers=h, json={"excluded_task_ids": [core]}).status_code == 400
 
 
-def test_new_goal_archives_old_one(client):
+def test_several_goals_can_be_active(client):
     h = signup(client)
     g1, _ = make_goal(client, h)
     activate(client, h, g1)
     g2, _ = make_goal(client, h)
     activate(client, h, g2)
     active = client.get("/goals?status=active", headers=h).json()
-    assert [g["id"] for g in active] == [g2]
+    assert sorted(g["id"] for g in active) == sorted([g1, g2])
+
+
+def test_goals_cannot_add_up_to_more_than_24h_on_a_day(client):
+    h = signup(client)
+    g1, _ = make_goal(client, h, days=(1, 2, 3), hours=16)
+    activate(client, h, g1)
+    # Mon has 16h already, so another 10h on Mon is refused…
+    r = client.post("/goals", headers=h, json={"title": "Second", "deadline": (MON + timedelta(days=20)).isoformat(),
+                                               "daily_available_hours": 10, "available_days": [1, 4]})
+    assert r.status_code == 400 and "Monday" in r.json()["detail"] and "8h" in r.json()["detail"]
+    # …but 10h on days the first goal doesn't use is fine (counted per day, not as one total)
+    g2, _ = make_goal(client, h, days=(4, 5, 6), hours=10)
+    activate(client, h, g2)
+    # and raising the first goal onto a busy day is refused too
+    assert client.patch(f"/goals/{g1}", headers=h, json={"available_days": [1, 2, 3, 4]}).status_code == 400
+    assert client.patch(f"/goals/{g1}", headers=h, json={"daily_available_hours": 14}).status_code == 200
 
 
 def test_review_partial_redistributes_and_keeps_history(client, clock):

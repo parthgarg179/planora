@@ -86,3 +86,6 @@
 .snap .ring-t { font: 600 17px var(--font); fill: var(--ink); }
 .snap ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; font-size: 13.5px; }
 .snap b { font-weight: 600; }
+
+/* several goals: a line between each goal's health block */
+.health + .health { border-top: 1px solid var(--line); }

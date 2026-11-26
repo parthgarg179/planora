@@ -19,7 +19,7 @@ export function openTaskDrawer(plan, taskId, onChanged) {
 
   const scrim = openOverlay(`<div class="scrim"><div class="drawer" role="dialog" aria-labelledby="drawer-title">
     <div class="dh"><div>
-        <p class="kicker">${milestoneTag(plan.milestone(t.milestone_id))} · ${esc(t.category)}</p>
+        <p class="kicker">${plan.multi ? `${esc(plan.goalOf(t).title)} · ` : ''}${milestoneTag(plan.milestone(t.milestone_id))} · ${esc(t.category)}</p>
         <h2 id="drawer-title">${esc(t.title)}</h2>
         <p class="tags">${taskPill(t)} ${priorityFlag(t.priority)} ${t.optional ? '<span class="pill line">optional</span>' : ''}</p>
       </div><button class="iconbtn x" type="button" data-close aria-label="Close">${icon('x', 18)}</button></div>
@@ -42,7 +42,7 @@ export function openTaskDrawer(plan, taskId, onChanged) {
     </section>
 
     <section class="dsec"><h3>Scheduled</h3>${days.length
-      ? `<ul class="plain-list">${days.map(d => `<li class="dep">${icon('calendar', 13)}${fmt(d)} · ${hrs(plan.byDate[d].find(a => a.task_id === taskId).planned_hours)} ${d > plan.goal.deadline ? '<span class="dlmark">after deadline</span>' : ''}</li>`).join('')}</ul>`
+      ? `<ul class="plain-list">${days.map(d => `<li class="dep">${icon('calendar', 13)}${fmt(d)} · ${hrs(plan.byDate[d].find(a => a.task_id === taskId).planned_hours)} ${d > plan.goalOf(t).deadline ? '<span class="dlmark">after deadline</span>' : ''}</li>`).join('')}</ul>`
       : `<p class="muted small">${t.status === 'done' ? 'Finished.' : 'Not scheduled.'}</p>`}</section>
 
     ${editable ? `<section class="dsec"><h3>Update now</h3>
@@ -71,7 +71,7 @@ export function openTaskDrawer(plan, taskId, onChanged) {
     catch (err) { button.disabled = false; toast(err.message); return; }
     closeOverlay();
     await onChanged?.();
-    if (!res.status.feasible) openFixModal(plan.goal.id, onChanged);
+    if (!res.status.feasible) openFixModal(t.goal_id, onChanged);
     else toast(`${t.title} updated. Schedule v${res.version}.`);
   };
   scrim.querySelector('#dq-done')?.addEventListener('click', e => save(true, e.currentTarget));

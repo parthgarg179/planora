@@ -60,7 +60,8 @@ export function changePassword({ current_password, new_password }) {
 }
 
 /* ---------------- goals ---------------- */
-export const getActiveGoal = () => delay(load().goal);
+// Mock keeps a single goal (a new goal replaces it). The real backend supports several active goals.
+export const getActiveGoals = () => delay([load().goal]);
 
 let draft = null; // goal being created in the New goal flow
 export function createGoal(input) { draft = { ...input, id: 'draft' }; return delay(draft); }

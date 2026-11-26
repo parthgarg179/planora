@@ -1,9 +1,9 @@
-/* Tasks — every task in the goal, grouped by milestone. */
-import { loadPlan } from '../services/planData.js';
+/* Tasks — every task of every active goal, grouped by goal, then by milestone. */
+import { loadPlan, goalTag } from '../services/planData.js';
 import { startPage, noGoal } from '../components/page.js';
 import { icon, priorityFlag } from '../core/icons.js';
 import { esc } from '../core/dom.js';
-import { hrs } from '../core/dates.js';
+import { hrs, fmt } from '../core/dates.js';
 import { taskPill } from '../components/pills.js';
 import { taskTable } from '../components/taskList.js';
 import { openTaskDrawer } from '../components/taskDrawer.js';
@@ -21,12 +21,20 @@ startPage('tasks', async m => {
 
 async function refresh() {
   plan = await loadPlan();
-  if (!plan.goal) { main.innerHTML = noGoal(); return; }
-  const { goal } = plan;
+  if (plan.empty) { main.innerHTML = noGoal(); return; }
+  const goal = plan.goals[0];
+  const sub = plan.multi ? `${plan.goals.length} goals` : `${esc(goal.title)} · ${goal.milestones.length} milestones`;
   main.innerHTML = `<div class="wrap">
-    <div class="page-h"><div><h1>Tasks</h1><p>${esc(goal.title)} · ${goal.milestones.length} milestones</p></div></div>
-    <div class="card">${goal.milestones.map(milestoneSection).join('')}</div>
+    <div class="page-h"><div><h1>Tasks</h1><p>${sub}</p></div></div>
+    ${plan.goals.map(goalCard).join('')}
     <p class="hint">Select any task for details, subtasks and estimates.</p></div>`;
+}
+
+/** One card per goal (with the goal's name as its heading when there are several). */
+function goalCard(g, i) {
+  const head = plan.multi ? `<div class="card-h"><h2 id="goal-${g.id}">${goalTag(plan, g.id)}</h2>
+      <div class="r muted small">due ${fmt(g.deadline, { month: 'short', day: 'numeric' })}</div></div>` : '';
+  return `<div class="card${i ? ' gap-top' : ''}"${plan.multi ? ` role="region" aria-labelledby="goal-${g.id}"` : ''}>${head}${g.milestones.map(milestoneSection).join('')}</div>`;
 }
 
 function milestoneSection(m) {

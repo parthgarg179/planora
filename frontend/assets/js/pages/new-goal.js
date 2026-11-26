@@ -65,7 +65,7 @@ function breakdownView() {
       <div><b>The AI couldn’t be reached</b><p class="small">So this is a generic starter plan. You can use it as it is, or try the AI again.</p></div>
       <button class="btn" type="button" id="retry-ai">${icon('refresh', 14)} Try AI again</button></div>` : '';
 
-  const sections = milestones.map(m => `<section aria-labelledby="ms-${esc(m.id)}">
+  const sections = milestones.map(m => `<section class="bd-ms" aria-labelledby="ms-${esc(m.id)}">
       <h2 class="ms-h" id="ms-${esc(m.id)}" style="--c:${esc(m.color)}"><i></i>${esc(m.name)}</h2>
       ${taskTable({
         caption: `${m.name} tasks`,

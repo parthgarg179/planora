@@ -15,6 +15,7 @@ import { esc } from '../core/dom.js';
 export function taskTable({ caption, columns, rows, interactive = true, showHeader = true }) {
   return `<table class="tlist${showHeader ? '' : ' no-head'}" role="table">
     <caption class="sr-only">${esc(caption)}</caption>
+    <colgroup><col>${columns.map(() => '<col>').join('')}</colgroup>
     <thead role="rowgroup"><tr role="row"><th role="columnheader" scope="col">Task</th>${columns.map(c => `<th role="columnheader" scope="col">${esc(c)}</th>`).join('')}</tr></thead>
     <tbody role="rowgroup">${rows.map(r => `<tr role="row"${interactive ? ` class="click${r.muted ? ' is-muted' : ''}" data-task="${esc(r.task.id)}"` : r.muted ? ' class="is-muted"' : ''}>
       <td role="cell" class="t-main">${interactive ? taskButton(r.task) : taskName(r.task)}${r.title || ''}</td>

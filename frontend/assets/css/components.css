@@ -86,6 +86,16 @@
 .ms-h { padding: 10px var(--s-4); background: #fafbfe; border-bottom: 1px solid var(--line); font-weight: 500; display: flex; gap: var(--s-2); align-items: center; font-size: 13.5px; margin: 0; }
 .ms-h i { width: 10px; height: 10px; border-radius: 3px; background: var(--c); flex: none; }
 .ms-h .muted { margin-left: auto; font-weight: 400; font-size: var(--fs-sm); }
+/* Breakdown screen: one table per milestone, so give them all the same column widths
+   (otherwise each table sizes itself and the hours zig-zag). Desktop only — mobile uses the flex layout above. */
+@media (min-width: 1024px) {
+  .bd-ms .tlist { table-layout: fixed; }
+  /* widths go on the <col>s (the header row is hidden, so the cells can't set them) */
+  .bd-ms .tlist col:nth-child(1) { width: 40%; }   /* Task */
+  .bd-ms .tlist col:nth-child(2) { width: 40%; }   /* Depends on */
+  .bd-ms .tlist col:nth-child(3) { width: 10%; }   /* Estimate */
+  .bd-ms .tlist col:nth-child(4) { width: 10%; }   /* Optional */
+}
 
 /* ---------- pills & tags ---------- */
 .pill { display: inline-block; padding: 4px 11px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 500; white-space: nowrap; }

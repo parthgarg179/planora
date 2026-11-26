@@ -5,6 +5,7 @@ The AI only decides WHAT work is needed. It never assigns dates; the scheduler d
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date
 
 from ..config import settings
@@ -13,11 +14,16 @@ from .validation import CleanPlan, ValidationFailed, extract_json, validate_plan
 log = logging.getLogger("planora.llm")
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-ATTEMPTS = 2
+ATTEMPTS = 2           # tries per model when the reply isn't usable JSON
+BUSY_PAUSE_SECONDS = 2  # wait before asking an overloaded model again
 
 
 class LLMUnavailable(Exception):
-    pass
+    """Gemini can't help (no key, bad key, network down, blocked reply)."""
+
+
+class LLMBusy(LLMUnavailable):
+    """Gemini is temporarily overloaded or rate-limited (503 / 429) or too slow: worth another try."""
 
 
 def build_prompt(title: str, description: str, deadline: date, today: date,
@@ -50,20 +56,26 @@ Reply with JSON only, in exactly this shape:
 }}"""
 
 
-def call_gemini(prompt: str) -> str:
+def call_gemini(prompt: str, model: str | None = None, timeout: float | None = None) -> str:
     if not settings.gemini_api_key:
         raise LLMUnavailable("GEMINI_API_KEY is not set in backend/.env")
     import httpx  # imported here so the rest of the app (and tests) don't need it
+    model = model or settings.gemini_model
+    timeout = timeout or settings.llm_timeout_seconds
 
     body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4},
     }
     try:
-        res = httpx.post(GEMINI_URL.format(model=settings.gemini_model), json=body,
-                         headers={"x-goog-api-key": settings.gemini_api_key}, timeout=settings.llm_timeout_seconds)
+        res = httpx.post(GEMINI_URL.format(model=model), json=body,
+                         headers={"x-goog-api-key": settings.gemini_api_key}, timeout=timeout)
+    except httpx.TimeoutException as exc:
+        raise LLMBusy(f"{model} took longer than {timeout:.0f}s") from exc
     except httpx.HTTPError as exc:
         raise LLMUnavailable(f"Couldn't reach Gemini: {exc}") from exc
+    if res.status_code in (429, 503):
+        raise LLMBusy(f"{model} returned {res.status_code}: {res.text[:200]}")
     if res.status_code != 200:
         raise LLMUnavailable(f"Gemini returned {res.status_code}: {res.text[:300]}")
     try:
@@ -73,20 +85,52 @@ def call_gemini(prompt: str) -> str:
         raise LLMUnavailable("Gemini's reply had no text (it may have been blocked).") from exc
 
 
+def _ask(model: str, prompt: str, deadline_at: float) -> CleanPlan:
+    """One model: up to ATTEMPTS tries when its reply isn't usable JSON, within the overall time budget."""
+    last: ValidationFailed | None = None
+    for attempt in range(ATTEMPTS):
+        remaining = deadline_at - time.monotonic()
+        if remaining < 3:
+            raise LLMBusy("no time left for another Gemini call")
+        retry_note = "\n\nYour previous reply was not usable. Reply with valid JSON only."
+        text = call_gemini(prompt if attempt == 0 else prompt + retry_note,
+                           model=model, timeout=min(settings.llm_timeout_seconds, remaining))
+        try:
+            return validate_plan(extract_json(text))
+        except ValidationFailed as exc:
+            last = exc
+    raise last
+
+
 def decompose(title: str, description: str, deadline: date, today: date,
               daily_hours: float, working_days: int, capacity_hours: float) -> tuple[CleanPlan, bool]:
     """Returns (plan, used_fallback)."""
     prompt = build_prompt(title, description, deadline, today, daily_hours, working_days, capacity_hours)
+    deadline_at = time.monotonic() + settings.llm_total_seconds
+    # When the main model is busy: ask it once more after a short pause, then the backup model.
+    models = [settings.gemini_model, settings.gemini_model]
+    if settings.gemini_fallback_model and settings.gemini_fallback_model != settings.gemini_model:
+        models.append(settings.gemini_fallback_model)
+
     last_error = "unknown error"
-    for attempt in range(ATTEMPTS):
+    for i, model in enumerate(models):
+        if i > 0 and model == models[i - 1]:
+            time.sleep(BUSY_PAUSE_SECONDS)
         try:
-            text = call_gemini(prompt if attempt == 0 else prompt + "\n\nYour previous reply was not usable. Reply with valid JSON only.")
-            return validate_plan(extract_json(text)), False
+            plan = _ask(model, prompt, deadline_at)
+            log.info("AI breakdown made by %s", model)
+            return plan, False
+        except LLMBusy as exc:
+            last_error = str(exc)
+            log.info("Gemini busy (%s); trying the next option", exc)
+            if time.monotonic() >= deadline_at - 3:
+                break  # no time left within the request limit
         except LLMUnavailable as exc:
             last_error = str(exc)
-            break  # network/key problems won't fix themselves on a retry
+            break  # no key, bad key, network down: retrying won't help
         except ValidationFailed as exc:
             last_error = str(exc)
+            break  # unusable JSON twice from this model; the starter plan is the safer choice
     log.warning("AI breakdown failed (%s); using the fallback plan", last_error)
     plan = fallback_plan(title, capacity_hours)
     plan.checks.insert(0, {"ok": True, "label": "AI unavailable, so a generic template plan was used. Edit or regenerate it later."})

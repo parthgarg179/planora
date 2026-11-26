@@ -29,7 +29,12 @@ class Settings:
 
     gemini_api_key: str = _env("GEMINI_API_KEY")
     gemini_model: str = _env("GEMINI_MODEL", "gemini-3.5-flash")
-    llm_timeout_seconds: float = float(_env("LLM_TIMEOUT_SECONDS", "120"))
+    # Used when the main model is overloaded (503) or rate-limited (429). Empty = no backup.
+    gemini_fallback_model: str = _env("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite")
+    # Longest wait for one Gemini reply, and for the whole breakdown including retries.
+    # The total stays under Vercel's 60 s request limit so the user always gets an answer.
+    llm_timeout_seconds: float = float(_env("LLM_TIMEOUT_SECONDS", "35"))
+    llm_total_seconds: float = float(_env("LLM_TOTAL_SECONDS", "50"))
 
     # A missed end-of-day review can still be filled in for this many days.
     # Older unreviewed days count as "not done" and their work is rescheduled.

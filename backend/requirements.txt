@@ -1,0 +1,6 @@
+# Everything the app needs at runtime (shared with the Vercel deployment):
+-r ../requirements.txt
+
+# Development only: tests and the ML report plots (not deployed)
+pytest>=8
+matplotlib>=3.9   # only for ml/plots.py

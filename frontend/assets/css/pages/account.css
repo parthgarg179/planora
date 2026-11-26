@@ -1,0 +1,9 @@
+/* account.css — personal details & preferences */
+.photo { display: flex; align-items: center; gap: var(--s-4); flex-wrap: wrap; }
+.photo > div:first-child { flex: 1 1 200px; }
+.file-btn { cursor: pointer; }
+.file-btn:focus-within { box-shadow: var(--focus); }
+.msg:empty { display: none; }
+.form > .msg { margin-top: -8px; }
+.est-line { display: flex; gap: var(--s-2); align-items: flex-start; }
+.est-line svg { color: var(--brand); margin-top: 2px; }

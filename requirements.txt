@@ -1,0 +1,22 @@
+# Runtime packages for the Planora backend (also what Vercel installs).
+# Pinned to the versions the app was tested with. scikit-learn must match the version
+# the saved model was trained with (backend/ml/models/duration_model_synthetic.joblib).
+fastapi==0.165.0
+starlette==1.10.0
+uvicorn[standard]==0.54.0
+SQLAlchemy==2.1.9
+psycopg[binary]==3.3.9
+pydantic==2.14.4
+email-validator==2.4.0
+python-dotenv==1.2.4
+PyJWT==2.15.1
+bcrypt==5.0.0
+httpx==0.28.1
+tzdata==2026.6
+
+# ML: task-duration model (backend/app/ml)
+scikit-learn==1.9.1
+scipy==1.18.1
+pandas==3.1.1
+numpy==2.5.5
+joblib==1.6.0

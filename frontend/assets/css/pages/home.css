@@ -1,0 +1,88 @@
+/* home.css — dashboard */
+.hero { text-align: center; margin: 6px 0 var(--s-6); }
+.hero .date { color: var(--ink-2); }
+.hero h1 { font-size: var(--fs-2xl); font-weight: 500; letter-spacing: -.02em; margin: 4px 0 14px; line-height: 1.15; }
+.chips {
+  display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin: 0; padding: 5px; list-style: none;
+  background: rgba(255, 255, 255, .55); border: 1px solid rgba(255, 255, 255, .8); border-radius: 12px;
+}
+.chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 10px; border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--ink-2); }
+.chip b { color: var(--ink); font-weight: 600; }
+.chip .ci { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: var(--brand); }
+.chip .ci.ok { background: #34c77b; }
+
+/* "missed review" / "done for the day?" banner: stacked on phones, one row from 600px */
+.cta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-3) 14px; padding: 14px var(--s-4); margin-top: 14px;
+  border-radius: var(--r); background: linear-gradient(120deg, var(--brand-strong), var(--violet-strong)); color: #fff; box-shadow: var(--shadow);
+}
+.cta > div { flex: 1 1 220px; min-width: 0; }
+.cta-t { font-weight: 600; }
+.cta p:not(.cta-t) { font-size: var(--fs-sm); }
+.cta .btn { color: var(--ink); flex: 1 1 100%; }
+@media (min-width: 600px) { .cta .btn { flex: none; margin-left: auto; } }
+
+.health { padding: var(--s-4); }
+.hrow { display: flex; justify-content: space-between; gap: var(--s-2); font-size: var(--fs-sm); margin-bottom: 6px; }
+.kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s-2); margin-top: 14px; }
+.kpi { display: flex; flex-direction: column-reverse; justify-content: flex-end; background: var(--surface-2); border-radius: 10px; padding: 10px; }
+.kpi .v { font-size: clamp(16px, 4.5vw, 20px); font-weight: 600; letter-spacing: -.01em; }
+.kpi .v.neg { color: var(--danger); }
+.kpi .l { font-size: var(--fs-xs); color: var(--muted); }
+
+/* ---------- dashboard grid ----------
+   Phones/tablets: one column, same order as today.
+   >= 1100px: main column + right-hand side column.
+   >= 1500px: Today's plan and Schedule side by side. */
+.dash { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "hero" "plan" "review" "sched" "health" "snap" "updates"; }
+.dash > .side-col { display: contents; }   /* on small screens its cards join the main flow */
+.a-hero { grid-area: hero; } .a-plan { grid-area: plan; } .a-sched { grid-area: sched; }
+.a-review { grid-area: review; } .a-health { grid-area: health; } .a-snap { grid-area: snap; } .a-updates { grid-area: updates; }
+.dash .cta { margin-top: 0; }
+.dash .hero { margin: 6px 0 10px; }
+
+@media (min-width: 1100px) {
+  .dash {
+    grid-template-columns: minmax(0, 1fr) clamp(300px, 26vw, 400px);
+    grid-template-areas: "hero hero" "plan side" "sched side";
+    grid-template-rows: auto auto 1fr;
+    align-items: start;
+    flex: 1;
+  }
+  .wrap:has(> .dash) { min-height: 100%; display: flex; flex-direction: column; }
+  /* plan and schedule stretch so the main column lines up with the side column */
+  .dash .a-plan, .dash .a-sched { align-self: stretch; }
+  .dash > .side-col { display: flex; flex-direction: column; gap: 14px; grid-area: side; }
+
+  /* greeting on the left, stats on the right */
+  .dash .hero {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "date chips" "title chips";
+    align-items: end; column-gap: 16px; text-align: left; margin: 0 0 4px;
+  }
+  .dash .hero .date { grid-area: date; }
+  .dash .hero h1 { grid-area: title; margin: 2px 0 0; }
+  .dash .chips { grid-area: chips; margin: 0; align-self: center; }
+
+  /* review banner becomes a card in the side column */
+  .dash .cta { flex-direction: column; align-items: stretch; text-align: left; }
+  .dash .cta > svg { align-self: flex-start; }
+  .dash .cta > div { flex: none; }
+  .dash .cta .btn { margin-left: 0; flex: none; width: 100%; }
+}
+@media (min-width: 1500px) {
+  .dash {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) clamp(320px, 22vw, 420px);
+    grid-template-areas: "hero hero side" "plan sched side";
+    grid-template-rows: auto 1fr;
+  }
+}
+
+/* Progress snapshot card (new on Home) */
+.snap { display: flex; align-items: center; gap: 16px; padding: 16px; }
+.snap svg { flex: none; }
+.snap .ring-bg { fill: none; stroke: #eef0f6; stroke-width: 10; }
+.snap .ring-fg { fill: none; stroke: var(--brand); stroke-width: 10; stroke-linecap: round; }
+.snap .ring-t { font: 600 17px var(--font); fill: var(--ink); }
+.snap ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; font-size: 13.5px; }
+.snap b { font-weight: 600; }

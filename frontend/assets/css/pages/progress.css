@@ -1,0 +1,31 @@
+/* progress.css */
+.grid2.first { margin-top: 0; }
+.gap-md { margin-top: 10px; }
+
+.ring { display: flex; flex-wrap: wrap; gap: var(--s-4) 22px; align-items: center; padding: 18px; }
+.ring-bg { fill: none; stroke: #eef0f6; stroke-width: 12; }
+.ring-fg { fill: none; stroke: var(--brand); stroke-width: 12; stroke-linecap: round; }
+.ring-t { font: 600 22px var(--font); fill: var(--ink); }
+.ring-facts { margin: var(--s-2) 0 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 13.5px; }
+
+.lock { display: flex; gap: var(--s-3); padding: var(--s-4); align-items: flex-start; }
+.lock .ic { width: 36px; height: 36px; border-radius: 10px; background: var(--brand-50); color: var(--brand); display: grid; place-items: center; flex: none; }
+.lock-t { font-size: var(--fs-base); font-weight: 600; }
+
+.legend { display: flex; flex-wrap: wrap; gap: var(--s-2) 14px; margin: 0; padding: var(--s-3) var(--s-4) 0; list-style: none; font-size: var(--fs-xs); color: var(--muted); }
+.legend li { display: flex; gap: 6px; align-items: center; }
+.legend i { width: 10px; height: 10px; border-radius: 3px; }
+.legend .est, .bb .est { background: #cfd6f6; }
+.legend .act, .bb .act { background: var(--brand); }
+.legend .over, .bb .over { background: #e58b8b; }
+
+/* one row per task: name on top on phones, three columns from 600px */
+.bars { margin: 0; padding: var(--s-3) var(--s-4); list-style: none; }
+.brow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; padding: 6px 0; font-size: var(--fs-sm); }
+.brow .bt { grid-column: 1 / -1; }
+.brow .bb { display: flex; flex-direction: column; gap: 3px; }
+.brow .bb i { display: block; height: 7px; width: var(--w); border-radius: 4px; }
+@media (min-width: 600px) {
+  .brow { grid-template-columns: 170px minmax(0, 1fr) 80px; }
+  .brow .bt { grid-column: auto; }
+}

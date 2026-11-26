@@ -15,7 +15,6 @@ log = logging.getLogger("planora.llm")
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 ATTEMPTS = 2           # tries per model when the reply isn't usable JSON
-BUSY_PAUSE_SECONDS = 2  # wait before asking an overloaded model again
 
 
 class LLMUnavailable(Exception):
@@ -107,31 +106,40 @@ def decompose(title: str, description: str, deadline: date, today: date,
     """Returns (plan, used_fallback)."""
     prompt = build_prompt(title, description, deadline, today, daily_hours, working_days, capacity_hours)
     deadline_at = time.monotonic() + settings.llm_total_seconds
-    # When the main model is busy: ask it once more after a short pause, then the backup model.
-    models = [settings.gemini_model, settings.gemini_model]
-    if settings.gemini_fallback_model and settings.gemini_fallback_model != settings.gemini_model:
-        models.append(settings.gemini_fallback_model)
+    stop_at = deadline_at - 5  # leave time to build the starter plan and answer before Vercel's limit
+    # Main model first, then the backups; while they're all busy, go round again after a short,
+    # growing pause (1 s, 2 s, 4 s...) until the time budget is used up.
+    models = [settings.gemini_model] + [m for m in settings.gemini_fallback_models if m != settings.gemini_model]
 
     last_error = "unknown error"
-    for i, model in enumerate(models):
-        if i > 0 and model == models[i - 1]:
-            time.sleep(BUSY_PAUSE_SECONDS)
-        try:
-            plan = _ask(model, prompt, deadline_at)
-            log.info("AI breakdown made by %s", model)
-            return plan, False
-        except LLMBusy as exc:
-            last_error = str(exc)
-            log.info("Gemini busy (%s); trying the next option", exc)
-            if time.monotonic() >= deadline_at - 3:
-                break  # no time left within the request limit
-        except LLMUnavailable as exc:
-            last_error = str(exc)
-            break  # no key, bad key, network down: retrying won't help
-        except ValidationFailed as exc:
-            last_error = str(exc)
-            break  # unusable JSON twice from this model; the starter plan is the safer choice
-    log.warning("AI breakdown failed (%s); using the fallback plan", last_error)
+    pause = 1.0
+    round_ = 0
+    while time.monotonic() < stop_at:
+        round_ += 1
+        for model in models:
+            if time.monotonic() >= stop_at:
+                break
+            try:
+                plan = _ask(model, prompt, deadline_at)
+                log.info("AI breakdown made by %s (round %d)", model, round_)
+                return plan, False
+            except LLMBusy as exc:
+                last_error = str(exc)
+                log.info("Gemini busy (%s); trying the next option", exc)
+            except LLMUnavailable as exc:
+                last_error = str(exc)
+                return _starter_plan(title, capacity_hours, last_error)  # no key, bad key, network down
+            except ValidationFailed as exc:
+                last_error = str(exc)  # unusable JSON twice from this model: try the next one
+        if time.monotonic() + pause >= stop_at:
+            break
+        time.sleep(pause)
+        pause = min(pause * 2, 8)
+    return _starter_plan(title, capacity_hours, last_error)
+
+
+def _starter_plan(title: str, capacity_hours: float, reason: str) -> tuple[CleanPlan, bool]:
+    log.warning("AI breakdown failed (%s); using the fallback plan", reason)
     plan = fallback_plan(title, capacity_hours)
     plan.checks.insert(0, {"ok": True, "label": "AI unavailable, so a generic template plan was used. Edit or regenerate it later."})
     return plan, True

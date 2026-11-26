@@ -29,9 +29,12 @@ class Settings:
 
     gemini_api_key: str = _env("GEMINI_API_KEY")
     gemini_model: str = _env("GEMINI_MODEL", "gemini-3.5-flash")
-    # Used when the main model is overloaded (503) or rate-limited (429). Empty = no backup.
-    gemini_fallback_model: str = _env("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite")
+    # Backups, in order, used when the main model is overloaded (503) or rate-limited (429).
+    # Comma-separated; empty = no backups.
+    gemini_fallback_models: list[str] = field(default_factory=lambda: _list(
+        _env("GEMINI_FALLBACK_MODELS", "gemini-3.5-flash-lite,gemini-flash-lite-latest")))
     # Longest wait for one Gemini reply, and for the whole breakdown including retries.
+    # While models are busy, Planora keeps cycling through them until about LLM_TOTAL_SECONDS - 5.
     # The total stays under Vercel's 60 s request limit so the user always gets an answer.
     llm_timeout_seconds: float = float(_env("LLM_TIMEOUT_SECONDS", "35"))
     llm_total_seconds: float = float(_env("LLM_TOTAL_SECONDS", "50"))

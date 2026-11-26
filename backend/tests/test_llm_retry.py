@@ -1,5 +1,6 @@
-"""What happens when Gemini is busy: retry the main model, then the backup model, then the
-starter plan, always within the time budget. Gemini is simulated; nothing calls Google."""
+"""What happens when Gemini is busy: Planora cycles through the main model and its backups, with
+short growing pauses, until about 45 of its 50 seconds are used, and only then uses the starter
+plan. Gemini and the clock are simulated; nothing calls Google and nothing really waits."""
 import json
 from datetime import date
 
@@ -14,27 +15,43 @@ VALID_REPLY = json.dumps({
                "category": "learning", "complexity": "Low", "priority": "High",
                "dependencies": [], "optional": False, "subtasks": []}],
 })
+BUSY = llm.LLMBusy("503 high demand")
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
 
 
 @pytest.fixture()
 def gemini(monkeypatch):
-    """Replace call_gemini with a script of replies; record which model was asked each time."""
+    """call_gemini follows `script` (then keeps saying busy); each call takes `call_seconds`."""
     monkeypatch.setattr(config, "settings", config.Settings(
-        gemini_api_key="test-key", gemini_model="main-model", gemini_fallback_model="backup-model",
+        gemini_api_key="test-key", gemini_model="main", gemini_fallback_models=["lite-a", "lite-b"],
         llm_timeout_seconds=35, llm_total_seconds=50, today_override=""))
     monkeypatch.setattr(llm, "settings", config.settings)
-    monkeypatch.setattr(llm.time, "sleep", lambda s: None)  # no real waiting in tests
-    calls, script = [], []
+    clock = FakeClock()
+    monkeypatch.setattr(llm.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(llm.time, "sleep", clock.sleep)
+    state = {"calls": [], "script": [], "call_seconds": 2.0}
 
     def fake_call(prompt, model=None, timeout=None):
-        calls.append(model)
-        outcome = script.pop(0)
+        state["calls"].append(model)
+        clock.now += state["call_seconds"]
+        outcome = state["script"].pop(0) if state["script"] else BUSY
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
 
     monkeypatch.setattr(llm, "call_gemini", fake_call)
-    return calls, script
+    state["clock"] = clock
+    return state
 
 
 def breakdown():
@@ -42,46 +59,44 @@ def breakdown():
 
 
 def test_main_model_works_first_time(gemini):
-    calls, script = gemini
-    script[:] = [VALID_REPLY]
+    gemini["script"] = [VALID_REPLY]
     plan, used_fallback = breakdown()
-    assert not used_fallback and calls == ["main-model"]
+    assert not used_fallback and gemini["calls"] == ["main"]
     assert plan.tasks[0].title == "Read the basics"
 
 
-def test_busy_once_then_main_model_works(gemini):
-    calls, script = gemini
-    script[:] = [llm.LLMBusy("503"), VALID_REPLY]
+def test_main_busy_then_first_backup_works(gemini):
+    gemini["script"] = [BUSY, VALID_REPLY]
     _, used_fallback = breakdown()
-    assert not used_fallback and calls == ["main-model", "main-model"]
+    assert not used_fallback and gemini["calls"] == ["main", "lite-a"]
 
 
-def test_main_busy_twice_then_backup_model_works(gemini):
-    calls, script = gemini
-    script[:] = [llm.LLMBusy("503"), llm.LLMBusy("429"), VALID_REPLY]
+def test_everything_busy_in_round_one_then_works_in_round_two(gemini):
+    gemini["script"] = [BUSY, BUSY, BUSY, VALID_REPLY]
     _, used_fallback = breakdown()
-    assert not used_fallback and calls == ["main-model", "main-model", "backup-model"]
+    assert not used_fallback and gemini["calls"] == ["main", "lite-a", "lite-b", "main"]
 
 
-def test_everything_busy_gives_starter_plan(gemini):
-    calls, script = gemini
-    script[:] = [llm.LLMBusy("503")] * 3
-    plan, used_fallback = breakdown()
-    assert used_fallback and calls == ["main-model", "main-model", "backup-model"]
-    assert "generic template" in plan.checks[0]["label"]
+def test_keeps_trying_until_about_45_seconds_then_starter_plan(gemini):
+    plan, used_fallback = breakdown()  # every call says busy
+    assert used_fallback and "generic template" in plan.checks[0]["label"]
+    assert len(gemini["calls"]) > 6              # several rounds, not one pass
+    assert 40 <= gemini["clock"].now <= 50       # used the budget, but stayed inside it
+
+
+def test_slow_busy_answers_still_stop_inside_the_budget(gemini):
+    gemini["call_seconds"] = 12.0  # like gemini-3.5-flash answering "busy" after 12 s
+    _, used_fallback = breakdown()
+    assert used_fallback and gemini["clock"].now <= 50
 
 
 def test_bad_key_gives_starter_plan_without_retrying(gemini):
-    calls, script = gemini
-    script[:] = [llm.LLMUnavailable("Gemini returned 400: API key not valid")]
+    gemini["script"] = [llm.LLMUnavailable("Gemini returned 400: API key not valid")]
     _, used_fallback = breakdown()
-    assert used_fallback and calls == ["main-model"]
+    assert used_fallback and gemini["calls"] == ["main"]
 
 
-def test_no_retry_once_the_time_budget_is_used_up(gemini, monkeypatch):
-    calls, script = gemini
-    clock = iter([0, 0, 49, 49, 49, 49])  # start, first call, then the budget is nearly gone
-    monkeypatch.setattr(llm.time, "monotonic", lambda: next(clock))
-    script[:] = [llm.LLMBusy("503"), VALID_REPLY, VALID_REPLY]
+def test_unusable_reply_moves_on_to_the_next_model(gemini):
+    gemini["script"] = ["not json", "still not json", VALID_REPLY]  # main fails twice, lite-a works
     _, used_fallback = breakdown()
-    assert used_fallback and calls == ["main-model"]
+    assert not used_fallback and gemini["calls"] == ["main", "main", "lite-a"]
